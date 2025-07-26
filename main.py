@@ -430,28 +430,43 @@ def create_daily_tips_generator():
  
 class SemanticScholarAPI:
     """Handler for Semantic Scholar API interactions"""
-    
-    BASE_URL = "https://api.semanticscholar.org/graph/v1"
-    
+
     @staticmethod
-    def search_papers(query: str, limit: int = 10) -> List[Dict]:
-        """Search for papers related to a query"""
+    def search_papers(query: str, limit: int = 5) -> List[Dict]:
+        """Search for papers related to a query, ensuring abstracts are present"""
         try:
-            url = url = f"https://api.semanticscholar.org/graph/v1/paper/search?query={query}&limit=5&fields=title,abstract,year,authors,url,citationCount,venue,publicationDate"
-            params = {
-                'query': query,
-                'limit': limit,
-                'fields': 'title,abstract,authors,year,citationCount,url,venue,publicationDate'
-            }
-            
-            response = requests.get(url, timeout=10)
-            if response.status_code == 200:
-                data = response.json()
-                return data.get('data', [])
-            return []
+            collected_papers = []
+            offset = 0
+            per_page = 20  # fetch more to filter better
+
+            while len(collected_papers) < limit:
+                url = (
+                    f"https://api.semanticscholar.org/graph/v1/paper/search"
+                    f"?query={query}&offset={offset}&limit={per_page}"
+                    f"&fields=title,abstract,year,authors,url,citationCount,venue,publicationDate,openAccessPdf"
+                )
+                response = requests.get(url, timeout=10)
+
+                if response.status_code != 200:
+                    st.error(f"❌ API Error: {response.status_code}")
+                    break
+
+                data = response.json().get("data", [])
+                if not data:
+                    break  # no more papers available
+
+                # Filter only papers with abstracts
+                papers_with_abstracts = [paper for paper in data if paper.get("abstract")]
+                collected_papers.extend(papers_with_abstracts)
+
+                offset += per_page
+
+            return collected_papers[:limit]  # ensure we only return exactly `limit` number
+
         except Exception as e:
-            st.error(f"Error searching papers: {str(e)}")
+            st.error(f"⚠️ Error searching papers: {str(e)}")
             return []
+
 
 class NutritionAPI:
     """Handler for USDA Nutrition API"""
@@ -568,6 +583,7 @@ def create_symptom_research_mapper():
 
         if search_button and symptoms_input.strip():
             if st.session_state.get("user_api_key"):
+                
                 st.session_state.symptoms = symptoms_input.strip()
                 with st.spinner("🔍 Searching research databases..."):
                     cache_key = hashlib.md5(symptoms_input.encode()).hexdigest()
@@ -577,9 +593,25 @@ def create_symptom_research_mapper():
                     else:
                         st.session_state.papers = SemanticScholarAPI.search_papers(symptoms_input, limit=5)
                         st.session_state.research_cache[cache_key] = st.session_state.papers
-                if "high_level_summary" in st.session_state and st.session_state.high_level_summary:
+
+                    # Generate high-level Gemini summary from abstracts (even if from cache)
+                    combined_abstracts = "\n\n".join([
+                        paper.get('abstract', '') for paper in st.session_state.papers if paper.get('abstract')
+                    ])
+
+                    if combined_abstracts:
+                        with st.spinner("🤖 Thinking... generating insight from research..."):
+                            high_level_summary = GeminiAPI.generate_content(
+                                content=combined_abstracts,
+                                context=symptoms_input
+                            )
+                            st.session_state.high_level_summary = high_level_summary
+                    else:
+                        st.session_state.high_level_summary = "No abstracts were available to generate a summary."
+
                     st.markdown("### 🧾 Gemini AI Overview")
                     st.info(st.session_state.high_level_summary)
+
             else:
                 st.error("⚠️ No Gemini API key found. Please enter it in the sidebar first.")
     # Use stored symptoms and papers
@@ -598,6 +630,7 @@ def create_symptom_research_mapper():
                     context=st.session_state.symptoms
                 )
                 st.session_state.high_level_summary = high_level_summary
+                
         else:
             st.session_state.high_level_summary = "No abstracts were available to generate a summary."
 
