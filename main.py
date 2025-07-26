@@ -480,13 +480,25 @@ class NutritionAPI:
             return []
 
 
+
+
 class GeminiAPI:
     """Handler for Gemini API interactions using actual Gemini Pro"""
+
+    @staticmethod
+    def configure_key():
+        """Configure the API key from Streamlit session state"""
+        api_key = st.session_state.get("user_api_key")
+        if not api_key:
+            
+            raise ValueError("No Gemini API key found in session state. Please enter it in the sidebar.")
+        genai.configure(api_key=api_key)
 
     @staticmethod
     def generate_summary(content: str, context: str = "health research") -> str:
         """Generate AI summary using Gemini API"""
         try:
+            GeminiAPI.configure_key()
             model = genai.GenerativeModel("gemini-1.5-flash-latest")
 
             prompt = (
@@ -500,10 +512,12 @@ class GeminiAPI:
 
         except Exception as e:
             return f"⚠️ Failed to generate summary: {e}"
-        
+
+    @staticmethod
     def generate_content(content: str, context: str = "health research") -> str:
         """Generate a Gemini-powered overview with remedies and insights based on research."""
         try:
+            GeminiAPI.configure_key()
             model = genai.GenerativeModel("gemini-1.5-flash-latest")
 
             prompt = (
@@ -522,7 +536,7 @@ class GeminiAPI:
 
         except Exception as e:
             return f"⚠️ Failed to generate content: {e}"
-  
+
 
 def create_symptom_research_mapper():
     """Phase 1A: Symptom-to-Research Mapper"""
@@ -553,19 +567,21 @@ def create_symptom_research_mapper():
         search_button = st.button("🔎 Find Research Studies", type="primary")
 
         if search_button and symptoms_input.strip():
-            st.session_state.symptoms = symptoms_input.strip()
-            with st.spinner("🔍 Searching research databases..."):
-                cache_key = hashlib.md5(symptoms_input.encode()).hexdigest()
+            if st.session_state.get("user_api_key"):
+                st.session_state.symptoms = symptoms_input.strip()
+                with st.spinner("🔍 Searching research databases..."):
+                    cache_key = hashlib.md5(symptoms_input.encode()).hexdigest()
 
-                if cache_key in st.session_state.research_cache:
-                    st.session_state.papers = st.session_state.research_cache[cache_key]
-                else:
-                    st.session_state.papers = SemanticScholarAPI.search_papers(symptoms_input, limit=5)
-                    st.session_state.research_cache[cache_key] = st.session_state.papers
-        if "high_level_summary" in st.session_state and st.session_state.high_level_summary:
-            st.markdown("### 🧾 Gemini AI Overview")
-            st.info(st.session_state.high_level_summary)
-
+                    if cache_key in st.session_state.research_cache:
+                        st.session_state.papers = st.session_state.research_cache[cache_key]
+                    else:
+                        st.session_state.papers = SemanticScholarAPI.search_papers(symptoms_input, limit=5)
+                        st.session_state.research_cache[cache_key] = st.session_state.papers
+                if "high_level_summary" in st.session_state and st.session_state.high_level_summary:
+                    st.markdown("### 🧾 Gemini AI Overview")
+                    st.info(st.session_state.high_level_summary)
+            else:
+                st.error("⚠️ No Gemini API key found. Please enter it in the sidebar first.")
     # Use stored symptoms and papers
     symptoms = st.session_state.symptoms
     papers = st.session_state.papers
@@ -629,6 +645,7 @@ def create_symptom_research_mapper():
 
     elif symptoms:
         st.warning("😕 No relevant studies found. Try different or more specific symptoms.")
+     
 
     # Saved Notes Section
     with col2:
@@ -1016,6 +1033,33 @@ def main():
         if st.sidebar.button("🔄 Reset Profile"):
             st.session_state.user_profile = {}
             st.rerun()
+
+
+    # Sidebar for Gemini API Key
+    with st.sidebar:
+        st.markdown("### 🔐 Enter Your Gemini API Key")
+        st.markdown(
+            "[Generate a key here](https://aistudio.google.com/app/apikey) 🔗",
+            unsafe_allow_html=True
+        )
+        
+        user_api_key = st.text_input(
+            "Paste your Gemini API key below:",
+            type="password",
+            placeholder="AIzaSyD...",
+            key="user_api_key"
+    )
+
+    # Use the provided key if available
+    if user_api_key:
+        genai.configure(api_key=user_api_key)
+    else:
+        st.warning("Please enter your Gemini API key in the sidebar.")
+
+    if user_api_key:
+        st.sidebar.success("✅ Gemini API key loaded.")
+    else:
+        st.sidebar.info("🔑 Awaiting Gemini API key...")
 
 if __name__ == "__main__":
     main()
