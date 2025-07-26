@@ -1,7 +1,6 @@
-pandas==2.3.1
-plotly==6.2.0
-protobuf==6.31.1
-python-dotenv==1.1.1
-Requests==2.32.4
-streamlit==1.46.1
-google.generativeai==0.8.5
+pandas
+plotly
+protobuf
+python-dotenv
+requests
+google.generativeai
