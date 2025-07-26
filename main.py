@@ -495,8 +495,6 @@ class NutritionAPI:
             return []
 
 
-
-
 class GeminiAPI:
     """Handler for Gemini API interactions using actual Gemini Pro"""
 
@@ -505,9 +503,61 @@ class GeminiAPI:
         """Configure the API key from Streamlit session state"""
         api_key = st.session_state.get("user_api_key")
         if not api_key:
-            
             raise ValueError("No Gemini API key found in session state. Please enter it in the sidebar.")
         genai.configure(api_key=api_key)
+
+    @staticmethod
+    def enhance_search_query(user_input: str) -> dict:
+        """Transform user's natural language into medical search terms"""
+        try:
+            GeminiAPI.configure_key()
+            model = genai.GenerativeModel("gemini-1.5-flash-latest")
+
+            prompt = f"""
+            You are a medical research assistant. Transform the user's natural language description into structured search terms for finding relevant medical research papers.
+
+            User input: "{user_input}"
+
+            Please provide:
+            1. PRIMARY_TERMS: 3-5 main medical/scientific terms (most important keywords)
+            2. ALTERNATIVE_TERMS: 3-5 alternative or related medical terms
+            3. CONDITION_NAMES: Potential medical condition names that might be related
+            4. RESEARCH_FOCUS: What type of research would be most relevant (treatment, causes, symptoms, etc.)
+
+            Format your response exactly like this:
+            PRIMARY_TERMS: term1, term2, term3
+            ALTERNATIVE_TERMS: alt1, alt2, alt3
+            CONDITION_NAMES: condition1, condition2
+            RESEARCH_FOCUS: focus_area
+            """
+
+            response = model.generate_content(prompt)
+            
+            # Parse the response
+            lines = response.text.strip().split('\n')
+            result = {}
+            
+            for line in lines:
+                if ':' in line:
+                    key, value = line.split(':', 1)
+                    key = key.strip()
+                    value = value.strip()
+                    
+                    if key in ['PRIMARY_TERMS', 'ALTERNATIVE_TERMS', 'CONDITION_NAMES']:
+                        result[key] = [term.strip() for term in value.split(',')]
+                    else:
+                        result[key] = value
+            
+            return result
+
+        except Exception as e:
+            # Fallback to basic keyword extraction
+            return {
+                'PRIMARY_TERMS': [user_input],
+                'ALTERNATIVE_TERMS': [],
+                'CONDITION_NAMES': [],
+                'RESEARCH_FOCUS': 'general symptoms'
+            }
 
     @staticmethod
     def generate_summary(content: str, context: str = "health research") -> str:
@@ -526,13 +576,13 @@ class GeminiAPI:
             return response.text.strip()
 
         except Exception as e:
-            return f"⚠️ Failed to generate summary: {e}"
+            return "Unable to generate summary at the moment. Please try again later."
 
     @staticmethod
     def generate_content(content: str, context: str = "health research") -> str:
         """Generate a Gemini-powered overview with remedies and insights based on research."""
         try:
-            GeminiAPI.configure_key()
+            # GeminiAPI.configure_key()
             model = genai.GenerativeModel("gemini-1.5-flash-latest")
 
             prompt = (
@@ -550,17 +600,76 @@ class GeminiAPI:
             return response.text.strip()
 
         except Exception as e:
-            return f"⚠️ Failed to generate content: {e}"
+            return f"Research analysis temporarily unavailable. Please try again in a moment. {e}"
+
+
+class EnhancedSemanticScholarAPI:
+    """Enhanced version of SemanticScholarAPI with better search strategies and error handling"""
+    
+    @staticmethod
+    def multi_strategy_search(enhanced_query: dict, limit: int = 10) -> list:
+        """
+        Perform multiple search strategies to find relevant papers with error handling
+        """
+        all_papers = []
+        seen_titles = set()
+        
+        try:
+            # Strategy 1: Search with primary terms
+            primary_terms = enhanced_query.get('PRIMARY_TERMS', [])
+            if primary_terms:
+                for term in primary_terms[:3]:
+                    try:
+                        papers = SemanticScholarAPI.search_papers(term, limit=3)
+                        for paper in papers:
+                            title = paper.get('title', '')
+                            if title not in seen_titles:
+                                seen_titles.add(title)
+                                all_papers.append(paper)
+                    except:
+                        continue  # Skip failed searches silently
+            
+            # Strategy 2: Search with condition names
+            conditions = enhanced_query.get('CONDITION_NAMES', [])
+            if conditions and len(all_papers) < limit:
+                for condition in conditions[:2]:
+                    try:
+                        papers = SemanticScholarAPI.search_papers(condition, limit=2)
+                        for paper in papers:
+                            title = paper.get('title', '')
+                            if title not in seen_titles:
+                                seen_titles.add(title)
+                                all_papers.append(paper)
+                    except:
+                        continue
+            
+            # Strategy 3: Combined search with alternative terms
+            alt_terms = enhanced_query.get('ALTERNATIVE_TERMS', [])
+            if alt_terms and len(all_papers) < limit:
+                try:
+                    combined_alt = ' '.join(alt_terms[:2])
+                    papers = SemanticScholarAPI.search_papers(combined_alt, limit=3)
+                    for paper in papers:
+                        title = paper.get('title', '')
+                        if title not in seen_titles:
+                            seen_titles.add(title)
+                            all_papers.append(paper)
+                except:
+                    pass
+            
+        except Exception:
+            # If all strategies fail, return empty list
+            pass
+        
+        return all_papers[:limit]
 
 
 def create_symptom_research_mapper():
-    """Phase 1A: Symptom-to-Research Mapper"""
+    """Enhanced Phase 1A: Interactive Symptom-to-Research Mapper"""
     
-    st.markdown('<div class="phase-header">🔍 Symptom-to-Research Mapper</div>', unsafe_allow_html=True)
-    st.markdown("💡 *Explore scientific papers based on your symptoms. Our AI will summarize findings to help you understand the latest research.*")
+    st.markdown('<div class="phase-header">🔍 AI Health Research Explorer</div>', unsafe_allow_html=True)
+    st.markdown("🎯 *Discover what science says about your symptoms - just describe how you feel!*")
 
-    col1, col2 = st.columns([2, 1])
-    
     # Init session state
     if "symptoms" not in st.session_state:
         st.session_state.symptoms = ""
@@ -570,158 +679,285 @@ def create_symptom_research_mapper():
         st.session_state.research_cache = {}
     if "saved_notes" not in st.session_state:
         st.session_state.saved_notes = []
+    if "show_quick_options" not in st.session_state:
+        st.session_state.show_quick_options = True
+    if "search_history" not in st.session_state:
+        st.session_state.search_history = []
+    if "search_performed" not in st.session_state:
+        st.session_state.search_performed = False
 
+    col1, col2 = st.columns([2.5, 1.5])
+    
     with col1:
-        st.markdown("### 🤒 Describe your symptoms")
+        # Interactive symptom input section
+        st.markdown("### 💬 Tell us what's bothering you")
+        
+        # Quick symptom categories (interactive buttons)
+        if st.session_state.show_quick_options:
+            st.markdown("**Quick start - tap a category:**")
+            
+            col_a, col_b, col_c = st.columns(3)
+            quick_categories = {
+                "😴 Sleep & Energy": ["trouble sleeping", "always tired", "can't stay awake"],
+                "🤕 Pain & Aches": ["headaches", "joint pain", "back pain"],  
+                "🧠 Mental Health": ["feeling anxious", "mood swings", "memory issues"],
+                "🍽️ Digestive": ["stomach pain", "bloating", "nausea"],
+                "❤️ Heart & Breathing": ["chest pain", "shortness of breath", "heart racing"],
+                "🤧 Cold & Flu": ["cough", "fever", "sore throat"]
+            }
+            
+            category_keys = list(quick_categories.keys())
+            
+            with col_a:
+                for i in range(0, len(category_keys), 3):
+                    if i < len(category_keys) and st.button(category_keys[i], key=f"cat_{i}"):
+                        st.session_state.selected_category = category_keys[i]
+                        st.session_state.show_category_options = True
+                        
+            with col_b:
+                for i in range(1, len(category_keys), 3):
+                    if i < len(category_keys) and st.button(category_keys[i], key=f"cat_{i}"):
+                        st.session_state.selected_category = category_keys[i]
+                        st.session_state.show_category_options = True
+                        
+            with col_c:
+                for i in range(2, len(category_keys), 3):
+                    if i < len(category_keys) and st.button(category_keys[i], key=f"cat_{i}"):
+                        st.session_state.selected_category = category_keys[i]
+                        st.session_state.show_category_options = True
+
+            # Show specific symptoms for selected category
+            if st.session_state.get('show_category_options'):
+                selected_cat = st.session_state.get('selected_category')
+                if selected_cat in quick_categories:
+                    st.markdown(f"**{selected_cat} - Choose specific symptoms:**")
+                    
+                    symptom_cols = st.columns(3)
+                    for idx, symptom in enumerate(quick_categories[selected_cat]):
+                        col_idx = idx % 3
+                        with symptom_cols[col_idx]:
+                            if st.button(f"• {symptom}", key=f"symptom_{symptom}"):
+                                st.session_state.symptoms = symptom
+                                st.session_state.show_quick_options = False
+                                st.session_state.show_category_options = False
+                                st.session_state.search_performed = True  # Mark as searched
+                                st.rerun()
+
+        # Main text input
         symptoms_input = st.text_area(
-            "What symptoms are you experiencing?",
-            placeholder="e.g., chronic fatigue, headaches, joint pain, sleep issues",
-            height=100
+            "Or describe in your own words:",
+            value=st.session_state.symptoms,
+            placeholder="e.g., I've been having trouble sleeping and wake up with headaches...",
+            height=80,
+            help="💡 Just describe how you feel - no medical terms needed!"
         )
+        
+        # Search controls
+        col_search, col_clear = st.columns([3, 1])
+        
+        with col_search:
+            search_button = st.button("🔎 Explore Research", type="primary", use_container_width=True)
+            
+        with col_clear:
+            if st.button("🔄 Reset", help="Clear and start over"):
+                st.session_state.symptoms = ""
+                st.session_state.papers = []
+                st.session_state.show_quick_options = True
+                st.session_state.show_category_options = False
+                st.session_state.search_performed = False  # Reset search flag
+                if 'high_level_summary' in st.session_state:
+                    del st.session_state.high_level_summary
+                st.rerun()
 
-        search_button = st.button("🔎 Find Research Studies", type="primary")
-
+        # Handle search
         if search_button and symptoms_input.strip():
             if st.session_state.get("user_api_key"):
-                
                 st.session_state.symptoms = symptoms_input.strip()
-                with st.spinner("🔍 Searching research databases..."):
+                st.session_state.search_performed = True  # Mark that a search was performed
+                
+                # Add to search history
+                if symptoms_input.strip() not in st.session_state.search_history:
+                    st.session_state.search_history.insert(0, symptoms_input.strip())
+                    st.session_state.search_history = st.session_state.search_history[:5]  # Keep last 5
+                
+                with st.spinner("🧠 AI is analyzing your symptoms..."):
+                    # Step 1: Enhance the query using AI
+                    enhanced_query = GeminiAPI.enhance_search_query(symptoms_input)
+                    
+                with st.spinner("🔍 Searching medical research databases..."):
                     cache_key = hashlib.md5(symptoms_input.encode()).hexdigest()
 
                     if cache_key in st.session_state.research_cache:
                         st.session_state.papers = st.session_state.research_cache[cache_key]
                     else:
-                        st.session_state.papers = SemanticScholarAPI.search_papers(symptoms_input, limit=5)
-                        st.session_state.research_cache[cache_key] = st.session_state.papers
+                        # Use enhanced multi-strategy search with error handling
+                        papers = EnhancedSemanticScholarAPI.multi_strategy_search(enhanced_query, limit=8)
+                        st.session_state.papers = papers
+                        
+                        # Only cache if we got results
+                        if papers:
+                            st.session_state.research_cache[cache_key] = papers
 
-                    # Generate high-level Gemini summary from abstracts (even if from cache)
-                    combined_abstracts = "\n\n".join([
-                        paper.get('abstract', '') for paper in st.session_state.papers if paper.get('abstract')
-                    ])
+                    # Generate high-level summary if we have papers
+                    if st.session_state.papers:
+                        combined_abstracts = "\n\n".join([
+                            paper.get('abstract', '') for paper in st.session_state.papers 
+                            if paper.get('abstract')
+                        ])
 
-                    if combined_abstracts:
-                        with st.spinner("🤖 Thinking... generating insight from research..."):
-                            high_level_summary = GeminiAPI.generate_content(
-                                content=combined_abstracts,
-                                context=symptoms_input
-                            )
-                            st.session_state.high_level_summary = high_level_summary
-                    else:
-                        st.session_state.high_level_summary = "No abstracts were available to generate a summary."
-
-                    st.markdown("### 🧾 Gemini AI Overview")
-                    st.info(st.session_state.high_level_summary)
+                        if combined_abstracts:
+                            with st.spinner("🤖 Generating insights from research..."):
+                                high_level_summary = GeminiAPI.generate_content(
+                                    content=combined_abstracts,
+                                    context=symptoms_input
+                                )
+                                st.session_state.high_level_summary = high_level_summary
+                
+                # Hide quick options after search
+                st.session_state.show_quick_options = False
+                st.session_state.show_category_options = False
 
             else:
-                st.error("⚠️ No Gemini API key found. Please enter it in the sidebar first.")
-    # Use stored symptoms and papers
-    symptoms = st.session_state.symptoms
-    papers = st.session_state.papers
-    if st.session_state.papers:
-    # Combine abstracts for Gemini prompt
-        combined_abstracts = "\n\n".join([
-            paper.get('abstract', '') for paper in st.session_state.papers if paper.get('abstract')
-        ])
+                st.error("🔑 Please add your Gemini API key in the sidebar to continue")
 
-        if combined_abstracts:
-            with st.spinner("🤖 Thinking... generating insight from research..."):
-                high_level_summary = GeminiAPI.generate_content(
-                    content=combined_abstracts,
-                    context=st.session_state.symptoms
-                )
-                st.session_state.high_level_summary = high_level_summary
-                
-        else:
-            st.session_state.high_level_summary = "No abstracts were available to generate a summary."
+        # Display results
+        symptoms = st.session_state.symptoms
+        papers = st.session_state.papers
 
-    if papers:
-        st.markdown("### 📚 Relevant Research Studies")
+        # Show AI overview if available
+        if hasattr(st.session_state, 'high_level_summary') and st.session_state.high_level_summary:
+            st.markdown("### 🧾 What Research Says")
+            st.success(st.session_state.high_level_summary)
 
-        for i, paper in enumerate(papers):
-            title = paper.get('title', 'Untitled Study')
-            year = paper.get('year', 'N/A')
-            abstract = paper.get('abstract')
-            abstract_snippet = abstract[:300] + "..." if abstract else "<em>No abstract available.</em>"
-            pdf_url = paper.get("openAccessPdf", {}).get("url")
+        # Display papers
+        if papers:
+            st.markdown(f"### 📚 Found {len(papers)} Relevant Studies")
+            
+            for i, paper in enumerate(papers):
+                title = paper.get('title', 'Untitled Study')
+                year = paper.get('year', 'N/A')
+                abstract = paper.get('abstract')
+                abstract_snippet = abstract[:250] + "..." if abstract else "Abstract not available"
+                pdf_url = paper.get("openAccessPdf", {}).get("url")
+                citation_count = paper.get('citationCount', 0)
 
-            st.markdown(f"""
-            <div class="study-card">
-                <h4>{title}</h4>
-                <p><strong>Year:</strong> {year}</p>
-                <p>{abstract_snippet}</p>
-            </div>
-            """, unsafe_allow_html=True)
+                # Paper card with better styling
+                with st.container():
+                    st.markdown(f"""
+                    <div style="border: 1px solid #e0e0e0; border-radius: 10px; padding: 15px; margin: 10px 0; background: #fafafa;">
+                        <h4 style="color: #2e7d32; margin-bottom: 5px;">{title}</h4>
+                        <p style="color: #666; font-size: 0.9em; margin-bottom: 10px;">
+                            📅 {year} • 📖 {citation_count} citations
+                        </p>
+                        <p style="line-height: 1.4;">{abstract_snippet}</p>
+                    </div>
+                    """, unsafe_allow_html=True)
 
-            summary_key = f"summary_{i}"
+                    summary_key = f"summary_{i}"
+                    
+                    # Action buttons
+                    col_summary, col_save, col_read = st.columns([2, 1, 1])
+                    
+                    with col_summary:
+                        if abstract and st.button(f"📝 Get Simple Summary", key=f"gen_sum_{i}"):
+                            with st.spinner("Creating easy-to-read summary..."):
+                                summary = GeminiAPI.generate_summary(abstract, f"symptoms: {symptoms}")
+                                st.session_state[summary_key] = summary
 
-            if abstract:
-                if st.button(f"📝 Generate AI Summary", key=f"generate_summary_{i}"):
-                    st.session_state[summary_key] = GeminiAPI.generate_summary(abstract, f"symptoms: {symptoms}")
+                    with col_save:
+                        if summary_key in st.session_state:
+                            if st.button(f"💾 Save", key=f"save_{i}"):
+                                st.session_state.saved_notes.append({
+                                    "title": title,
+                                    "summary": st.session_state[summary_key],
+                                    "url": pdf_url,
+                                    "year": year,
+                                    "citations": citation_count
+                                })
+                                st.success("✅ Saved!")
 
+                    with col_read:
+                        if pdf_url:
+                            st.markdown(f"[📖 Full Paper]({pdf_url})")
 
-                if summary_key in st.session_state:
-                    with st.expander("🧠 View AI Summary"):
-                        st.markdown(st.session_state[summary_key])
-                        if st.button(f"💾 Save to Notes", key=f"save_{i}"):
-                            st.session_state.saved_notes.append({
-                                "title": title,
-                                "summary": st.session_state[summary_key],
-                                "url": pdf_url
-                            })
-                            st.success("✅ Saved to notes!")
+                    # Show summary if generated
+                    if summary_key in st.session_state:
+                        with st.expander("🧠 Easy Summary", expanded=True):
+                            st.markdown(st.session_state[summary_key])
 
+                    st.markdown("---")
 
-            if pdf_url:
-                st.markdown(f"[📖 Read Full Paper]({pdf_url})")
+        elif symptoms and st.session_state.get('search_performed', False) and len(st.session_state.papers) == 0:
+            # Only show this if user actually performed a search and got no results
+            st.info("🤔 Hmm, we couldn't find specific research for that. Try describing your symptoms differently or use our quick categories above!")
 
-            st.markdown("---")
-
-    elif symptoms:
-        st.warning("😕 No relevant studies found. Try different or more specific symptoms.")
-     
-
-    # Saved Notes Section
+    # Right sidebar with enhanced features
     with col2:
-        st.markdown("### 🗂️ Your Saved Notes")
+        # Search history
+        if st.session_state.search_history:
+            st.markdown("### 🕒 Recent Searches")
+            for idx, search in enumerate(st.session_state.search_history):
+                if st.button(f"🔍 {search[:30]}...", key=f"history_{idx}"):
+                    st.session_state.symptoms = search
+                    st.session_state.search_performed = True  # Mark as searched
+                    st.session_state.show_quick_options = False
+                    # Try to get cached results
+                    cache_key = hashlib.md5(search.encode()).hexdigest()
+                    if cache_key in st.session_state.research_cache:
+                        st.session_state.papers = st.session_state.research_cache[cache_key]
+                    st.rerun()
+
+        # Saved notes with better organization
+        st.markdown("### 🗂️ Your Research Notes")
         if st.session_state.saved_notes:
             for idx, note in enumerate(st.session_state.saved_notes):
-                with st.expander(f"📝 {note['title']}"):
+                with st.expander(f"📋 Study #{idx+1} ({note.get('year', 'N/A')})"):
+                    st.markdown(f"**{note['title'][:60]}...**")
+                    st.markdown(f"📊 {note.get('citations', 0)} citations")
+                    st.markdown("---")
                     st.markdown(note['summary'])
-                    if note["url"]:
-                        st.markdown(f"[📖 Read Full Paper]({note['url']})")
+                    if note.get("url"):
+                        st.markdown(f"[📖 Full Paper]({note['url']})")
+                    if st.button(f"🗑️ Remove", key=f"remove_{idx}"):
+                        st.session_state.saved_notes.pop(idx)
+                        st.rerun()
         else:
-            st.info("No notes saved yet.")
+            st.info("💡 Generate summaries and save them here for quick reference!")
 
-        # Search Tips & Popular
-        st.markdown("### 💡 Search Tips")
-        st.info("""
-        **For best results:**
-        - Use specific medical terms
-        - Include duration (chronic, acute)
-        - Mention severity or frequency
-        - Combine related symptoms
-        """)
-
-        st.markdown("### 📊 Popular Searches")
-        popular_symptoms = [
-            "chronic fatigue syndrome",
-            "migraine headaches",
-            "anxiety depression",
-            "insomnia sleep disorders",
-            "joint inflammation arthritis"
+        # Health insights
+        st.markdown("### 🎯 Health Tip")
+        health_tips = [
+            "💧 Staying hydrated can help with many symptoms",
+            "🚶‍♀️ Light exercise often improves mood and energy",
+            "😴 Good sleep hygiene is crucial for healing",
+            "🥗 Anti-inflammatory foods may reduce pain",
+            "🧘‍♀️ Stress management helps with many conditions"
         ]
         
-        for symptom in popular_symptoms:
-            if st.button(f"🔍 {symptom.title()}", key=f"popular_{symptom}"):
-                st.session_state.symptoms = symptom
-                cache_key = hashlib.md5(symptom.encode()).hexdigest()
+        import random
+        tip = random.choice(health_tips)
+        st.success(tip)
+
+        # Trending searches (mock data for engagement)
+        st.markdown("### 🔥 Trending Health Topics")
+        trending = [
+            "long covid symptoms",
+            "vitamin D deficiency", 
+            "gut health microbiome",
+            "sleep apnea signs",
+            "inflammation markers"
+        ]
+        
+        for trend in trending:
+            if st.button(f"📈 {trend}", key=f"trend_{trend}"):
+                st.session_state.symptoms = trend
+                st.session_state.show_quick_options = False
+                st.session_state.search_performed = True  # Mark as searched
+                # Try to get cached results
+                cache_key = hashlib.md5(trend.encode()).hexdigest()
                 if cache_key in st.session_state.research_cache:
                     st.session_state.papers = st.session_state.research_cache[cache_key]
-                else:
-                    st.session_state.papers = SemanticScholarAPI.search_papers(symptom, limit=5)
-                    st.session_state.research_cache[cache_key] = st.session_state.papers
                 st.rerun()
-
 
 def create_nutrition_lookup():
     """Nutrition data lookup with USDA API"""
